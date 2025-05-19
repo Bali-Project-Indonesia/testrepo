@@ -52,7 +52,7 @@ def highlight_pdf():
         buffer.seek(0)
 
         # === Tambahan: Simpan ke folder lokal ===
-        output_dir = r'C:\xampp\htdocs\openjob_id\public\cvs'
+         output_dir = r'C:\xampp\htdocs\openjob_dev_jupli\storage\cvs'
         os.makedirs(output_dir, exist_ok=True)
 
         # Tentukan path file output
