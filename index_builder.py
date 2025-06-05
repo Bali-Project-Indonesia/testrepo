@@ -1,3 +1,4 @@
+import os 
 import mysql.connector
 import faiss
 import numpy as np
@@ -16,15 +17,26 @@ def fetch_jobs_from_db():
 
     # ✅ JOIN dengan tabel functional_areas
     cursor.execute("""
-        SELECT jobs.id, jobs.description, jobs.benefits, jobs.functional_area_id, functional_areas.functional_area
+        SELECT 
+            jobs.id, 
+            jobs.description, 
+            jobs.benefits, 
+            jobs.functional_area_id, 
+            functional_areas.functional_area
         FROM jobs
         LEFT JOIN functional_areas ON jobs.functional_area_id = functional_areas.functional_area_id
+        LEFT JOIN job_apply ON jobs.id = job_apply.job_id
+        WHERE job_apply.job_id IS NULL;
     """)
     jobs = cursor.fetchall()
     conn.close()
     return jobs
 
 def rebuild_faiss_index():
+     # Hapus file index FAISS lama jika ada
+    if os.path.exists("faiss_index.bin"):
+        os.remove("faiss_index.bin")
+        print("✅ Old FAISS index deleted.")
     jobs = fetch_jobs_from_db()
 
     # ✅ Gabungkan semua informasi relevan untuk embedding
@@ -80,3 +92,57 @@ def delete_from_faiss(job_id_to_delete):
         pickle.dump(new_job_id_map, f)
 
     print(f"🗑️ FAISS index updated — job_id {job_id_to_delete} removed.")
+
+def rebuild_faiss_with_removed_jobs():
+    jobs = fetch_jobs_from_db()
+
+    # ✅ Gabungkan semua informasi relevan untuk embedding
+    texts = [
+        (job['description'] or '') + ' ' + 
+        (job.get('benefits', '') or '') + ' ' + 
+        (job.get('functional_area', '') or '')
+        for job in jobs
+    ]
+
+    embeddings = model.encode(texts)
+
+    # ✅ Normalisasi ke unit vector (cosine sim)
+    embeddings = normalize(np.array(embeddings), norm='l2').astype("float32")
+
+    # ✅ Ganti ke IndexFlatIP (inner product = cosine sim jika normalized)
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index.add(embeddings)
+
+    # ✅ Menyimpan index FAISS yang telah diperbarui
+    faiss.write_index(index, "faiss_index.bin")
+
+    job_id_map = {i: job["id"] for i, job in enumerate(jobs)}
+    with open("job_id_map.pkl", "wb") as f:
+        pickle.dump(job_id_map, f)
+
+    print("✅ FAISS cosine similarity index updated after removing jobs that are already applied.")
+    
+# Fungsi ini bisa dipanggil jika ada pekerjaan yang sudah dilamar dan perlu dihapus dari FAISS index
+def remove_applied_jobs_from_faiss():
+    # Ambil semua pekerjaan yang sudah dilamar
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",  # ganti sesuai
+        database="jobsportal_db"
+    )
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT job_id
+        FROM job_apply;
+    """)
+    applied_jobs = cursor.fetchall()
+    conn.close()
+
+    # Hapus pekerjaan yang sudah dilamar dari FAISS index
+    for job in applied_jobs:
+        job_id_to_delete = job['job_id']
+        delete_from_faiss(job_id_to_delete)
+        
+    print("✅ Applied jobs removed from FAISS index.")
